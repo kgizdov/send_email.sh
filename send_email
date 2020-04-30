@@ -1,0 +1,265 @@
+#!/bin/bash
+# Copyright (c) 2020 Konstantin Gizdov
+## Script to send an email with minimal requirements
+# Depends only on:
+#  - coreutils (`base64`, `numfmt`, `stat`)
+#  - bash
+#  - curl
+# Aimed at sending emails from within
+# continuous integration runners
+# and other feature-limited light
+# environments
+__MY_VERSION__="0.1"
+__DEBUG_MODE__=0
+__VERBOSE_MODE__=0
+srv_url="${EMAIL_SRV}"
+addr_from="${MY_EMAIL}"
+name_from="${MY_NAME}"
+from_field="${name_from} <${addr_from}>"
+rpl_to="${name_from} <${addr_from}>"
+addr_to="${SUP_EMAIL}"
+name_to="${SUP_NAME}"
+to_field="${name_to} <${addr_to}>"
+subj_field="${MY_SUBJECT}"
+my_cc="${MY_ED_EMAIL}"
+addr_cc_arr=("${my_cc}")
+name_cc_arr=("${name_from}")
+email_creds="${EMAIL_AUTH}"'*'
+attachment_files=()
+body_str="
+Hi,
+
+A new build has been completed. It is ready for review.
+Please have a look at the attached file or alternatively at the following link:
+
+https://example.com/project/repo/builds/artifacts/master/file/artifact.name?job=job_name
+
+--
+Regards,
+Your CI runner"
+
+file_upload="$(mktemp)"
+touch "${file_upload}"
+trap "rm -rf ${file_upload}" EXIT
+
+function err_echo {
+      printf '%s\n' "${1}" >&2  # send message to stderr
+}
+
+function fail {
+    err_echo "${1}"
+    exit "${2-1}"  # return a code specified by $2 or $1
+}
+
+function make_cc_string {
+    local cc_string=''
+    # get length of $addr_cc_arr and $name_cc_arr arrays
+    # and compare their sizes
+    local addr_len=${#addr_cc_arr[@]}
+    local name_len=${#name_cc_arr[@]}
+    if [[ ${addr_len} != ${name_len} ]]; then
+        err_echo "CC arrays specifying names and addresses have mismatched sizes."
+        fail "If you are using the -c or -C flags, you have to provide an equal number of matching pairs. Exiting..." 1
+    fi
+    for (( i=0; i<${addr_len}; i++ )); do
+        if [[ $i != 0 ]]; then
+            cc_string+=','
+        fi
+        cc_string+="\"${name_cc_arr[$i]}\" <${addr_cc_arr[$i]}>"
+        if [[ $i != $((${addr_len} - 1)) ]]; then
+            cc_string+=' '
+        fi
+    done
+    echo ${cc_string}
+}
+
+function mail_rcpts {
+    local mail_rcpts_str=''
+    for i in ${addr_cc_arr[@]}; do
+        mail_rcpts_str+="--mail-rcpt ${i} "
+    done
+    echo ${mail_rcpts_str}
+}
+
+function version {
+    echo "send_email.sh version v${__MY_VERSION__}"
+    echo "Copyright (c) 2020 Konstantin Gizdov"
+}
+
+function help {
+    # print info & help
+    version
+    echo "Usage: $0 [options]
+options:
+    -a <email address>       Email address of sender
+    -n <string>              Name of sender
+    -d <email address>       Destination email
+    -N <string>              Name of recipient
+    -s <string>              Email subject
+    -c <email>               Email to be added to CC list
+                               can be supplied multiple times
+    -C <email>               Name to be added to CC list
+                               can supplied multiple times
+                               (should correspond to email supplied in previous '-c' option call)
+    -A <file path>           File to be attached
+                               can be supplied multiple times
+    -b <string>              Email body
+    -t <username:password>   Authentication string used to
+                             contact email server
+
+helper options:
+    -D  Debug mode, nothing will be sent
+          implies verbose mode
+    -v  Verbose mode
+    -h  Print this help message
+"
+}
+
+function check_file {
+    if [ ! -e "$1" ]; then
+        fail "The file $1 does not exist." 1
+    fi
+
+    size=$(stat -c%s "$1")
+    if (( size > 52428800 )); then
+        fail "File $1 is breaking the file size limit imposed on email (currently 50MB)." 1
+    fi
+}
+
+function make_body {
+    echo "${body_str}" | base64
+}
+
+function construct_email {
+    local start_str="From: ${from_field}
+To: ${to_field}
+Subject: ${subj_field}
+Reply-To: ${rpl_to}
+Cc: ${cc_field}
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=\"MULTIPART-MIXED-BOUNDARY\"
+
+--MULTIPART-MIXED-BOUNDARY
+Content-Type: multipart/alternative; boundary=\"MULTIPART-ALTERNATIVE-BOUNDARY\"
+
+--MULTIPART-ALTERNATIVE-BOUNDARY
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+Content-Disposition: inline
+
+${body_field}
+--MULTIPART-ALTERNATIVE-BOUNDARY--"
+    echo "${start_str}" > "${file_upload}"
+    local attachment_str=''
+    local cnt_type='application/octet-stream'
+    for att in ${attachment_files[@]}; do
+        attachment_str=''
+        if [[ ${att##*.} == 'txt' ]]; then
+            cnt_type='text/plain'
+        elif [[ ${att##*.} == 'jpg' ]]; then
+            cnt_type='image/jpeg'
+        elif [[ ${att##*.} == 'jpeg' ]]; then
+            cnt_type='image/jpeg'
+        elif [[ ${att##*.} == 'png' ]]; then
+            cnt_type='image/png'
+        elif [[ ${att##*.} == 'pdf' ]]; then
+            cnt_type='application/pdf'
+        else
+            cnt_type='application/octet-stream'
+        fi
+        attachment_str+="--MULTIPART-MIXED-BOUNDARY
+Content-Type: ${cnt_type}
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename=\"${att}\"\n"
+        echo -e "${attachment_str}" >> "${file_upload}"
+        # convert file to base64 and append to the upload file
+        echo "$(cat "${att}" | base64)" >> "${file_upload}"
+    done
+
+    # end of uploaded file
+    echo "--MULTIPART-MIXED-BOUNDARY--" >> "${file_upload}"
+}
+
+while getopts "t:c:C:a:n:d:N:s:A:b:Dvh" opt; do
+    case $opt in
+        a)
+            addr_from="${OPTARG}"
+            ;;
+        n)
+            name_from="${OPTARG}"
+            ;;
+        d)
+            addr_to="${OPTARG}"
+            ;;
+        N)
+            name_to="${OPTARG}"
+            ;;
+        s)
+            subj_field="${OPTARG}"
+            ;;
+        c)
+            addr_cc_arr+=("${OPTARG}")
+            ;;
+        C)
+            name_cc_arr+=("${OPTARG}")
+            ;;
+        A)
+            attachment_files+=("${OPTARG}")
+            ;;
+        b)
+            body_str="${OPTARG}"
+            ;;
+        D)
+            __DEBUG_MODE__=1
+            ;;
+        v)
+            __VERBOSE_MODE__=1
+            ;;
+        t)
+            email_creds="${OPTARG}"
+            ;;
+        ?|h)
+            help
+            ;;
+        :)
+            echo "Option -${OPTARG} needs an argument."
+            exit 1
+            ;;
+        \?)
+            echo "Invalid option -${OPTARG}"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "${attachment_files}" ]]; then
+    attachment_files=('test.pdf')
+fi
+
+cc_field="$(make_cc_string)"
+body_field="$(make_body)"
+construct_email
+check_file "${file_upload}"
+
+curl_command='curl'
+if [[ ${__VERBOSE_MODE__} == 1 ]]; then
+    curl_command+=' -v'
+fi
+curl_command+=" --url ${srv_url} --ssl-reqd --mail-from ${addr_from} --mail-rcpt ${addr_to} $(mail_rcpts) --user ${email_creds} -T ${file_upload}"
+
+if [[ ${__DEBUG_MODE__} == 1 ]]; then
+    cp "${file_upload}" debug.eml
+    echo "command that was going to run is:"
+    echo "${curl_command}"
+    fail "email file is saved in debug.eml" 0
+fi
+
+# send email
+echo "sending ...."
+eval "${curl_command}"
+res=$?
+if test "$res" != "0"; then
+   echo "sending failed with: $res"
+else
+    echo "OK"
+fi
