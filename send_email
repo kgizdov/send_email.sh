@@ -1,4 +1,5 @@
 #!/bin/bash
+# send_email.sh (or SNDEM for short)
 # Copyright (c) 2020 Konstantin Gizdov
 ## Script to send an email with minimal requirements
 # Depends only on:
@@ -9,121 +10,280 @@
 # continuous integration runners
 # and other feature-limited light
 # environments
-__MY_VERSION__="0.1"
+set -euo pipefail
+IFS=$'\n\t'
+__MY_VERSION__="0.2"
 __DEBUG_MODE__=0
+__DRYRUN_MODE__=0
 __VERBOSE_MODE__=0
-srv_url="${EMAIL_SRV}"
-addr_from="${MY_EMAIL}"
-name_from="${MY_NAME}"
-from_field="${name_from} <${addr_from}>"
-rpl_to="${name_from} <${addr_from}>"
-addr_to="${SUP_EMAIL}"
-name_to="${SUP_NAME}"
-to_field="${name_to} <${addr_to}>"
-subj_field="${MY_SUBJECT}"
-my_cc="${MY_ED_EMAIL}"
-addr_cc_arr=("${my_cc}")
-name_cc_arr=("${name_from}")
-email_creds="${EMAIL_AUTH}"'*'
-attachment_files=()
-body_str="
-Hi,
+__BASE64_MODE__=0
+__CMTMSG_MODE__=0
+__CMTMSG_CMD_MODE__=0
+__REQSUBJ_MODE__=0
+__SENDER_NAME__=0
+__FILESIZE_LIMIT__=52428800
 
-A new build has been completed. It is ready for review.
-Please have a look at the attached file or alternatively at the following link:
-
-https://example.com/project/repo/builds/artifacts/master/file/artifact.name?job=job_name
-
---
-Regards,
-Your CI runner"
-
-file_upload="$(mktemp)"
-touch "${file_upload}"
-trap "rm -rf ${file_upload}" EXIT
+function verbose_echo {
+    # only print to screen when second argument is 1
+    [[ ${2} == 1 ]] && echo "${1}"
+}
 
 function err_echo {
-      printf '%s\n' "${1}" >&2  # send message to stderr
+    # print to stderr
+    printf '%s\n' "${1}" >&2  # send message to stderr
 }
 
 function fail {
+    # fail with error message
     err_echo "${1}"
     exit "${2-1}"  # return a code specified by $2 or $1
 }
 
-function make_cc_string {
-    local cc_string=''
+function raw_or_base64 {
+    # check if input is base64 encoded
+    # echo 0 if raw
+    # echo 1 if base64 encoded
+    $(echo "${1}" | base64 -d 2>/dev/null 1>/dev/null)
+    local __ret=$?
+    if [[ ${__ret} != 0 ]]; then
+        echo "0"
+    else
+        echo "1"
+    fi
+}
+
+function decode_either {
+    # decode a base64 string or
+    # echo it back if not encoded
+    if [[ $(raw_or_base64 "${1}") == 0 ]]; then
+        echo "${1}"
+    else
+        echo "${1}" | base64 -d
+    fi
+}
+
+function check_str {
+    # check if string is defined and not null
+    # $1 - string to check
+    # $2 - error message if check fails
+    if [[ ! -n "${1}" ]]; then
+        fail "${2}" 1
+    fi
+}
+
+function check_str_opt {
+    # check if string is defined and not null if
+    # and only if an option is enabled
+    # $1 - option to check
+    # $2 - string to check
+    # $3 - error message if check fails
+    if [[ ${1} != 0 ]]; then
+        check_str "${2}" "${3}"
+    fi
+}
+
+function check_srv {
+    check_str "${srv_url}" "Email server not specified. Exiting..."
+}
+
+function check_subj {
+    check_str_opt ${__REQSUBJ_MODE__} "${subj_field}" "Email subject not specified. Exiting..."
+}
+
+function check_addr_from {
+    check_str "${addr_from}" "Sender address not specified. Exiting..."
+}
+
+function check_name_from {
+    check_str_opt "${__SENDER_NAME__}" "${name_from}" "Sender name not specified. Exiting..."
+}
+
+function check_email_creds {
+    check_str "${email_creds}" "Email server credentials not specified. Exiting..."
+}
+
+function check_addr_to {
+    check_str "${addr_to_arr}" "Recipient address not specified. Exiting..."
+}
+
+function check_name_arr {
+    # checks whether a variable when read
+    # as an array will be an empty one
+    # or not
+    # returns:
+    # - 0 if empty
+    # - 1 if not
+    readarray -td, __name_arr <<<"${1},"
+    # strip trailing $'\n' element
+    unset '__name_arr[-1]'
+    if [[ ${#__name_arr[@]} == 1 ]] && [[ ! -n "${__name_arr[0]}" ]]; then
+        echo 0
+    else
+        echo 1
+    fi
+}
+
+function check_size_arrs {
+    # compares the sizes of two comma
+    # separated lists (array)
+    # used to match names to addresses
+    local __check="$(check_name_arr "${1}")"
+    if [[ ${__check} == 0 ]]; then
+        return 0
+    fi
+    # assume arrays are stored as comma separated lists
+    readarray -td, __name_arr <<<"${1},"
+    readarray -td, __addr_arr <<<"${2},"
+    # strip trailing $'\n' element
+    unset '__name_arr[-1]'
+    unset '__addr_arr[-1]'
     # get length of $addr_cc_arr and $name_cc_arr arrays
     # and compare their sizes
-    local addr_len=${#addr_cc_arr[@]}
-    local name_len=${#name_cc_arr[@]}
-    if [[ ${addr_len} != ${name_len} ]]; then
-        err_echo "CC arrays specifying names and addresses have mismatched sizes."
-        fail "If you are using the -c or -C flags, you have to provide an equal number of matching pairs. Exiting..." 1
+    local __name_len=${#__name_arr[@]}
+    local __addr_len=${#__addr_arr[@]}
+    if [[ ${__addr_len} != ${__name_len} ]]; then
+        err_echo "recipients, CC or BCC arrays specifying names and addresses have mismatched sizes."
+        fail "If you are using the -c/-C or -e/-E flags, you have to provide an equal number of matching pairs. Exiting..." 1
     fi
-    for (( i=0; i<${addr_len}; i++ )); do
-        if [[ $i != 0 ]]; then
-            cc_string+=','
-        fi
-        cc_string+="\"${name_cc_arr[$i]}\" <${addr_cc_arr[$i]}>"
-        if [[ $i != $((${addr_len} - 1)) ]]; then
-            cc_string+=' '
-        fi
-    done
-    echo ${cc_string}
-}
-
-function mail_rcpts {
-    local mail_rcpts_str=''
-    for i in ${addr_cc_arr[@]}; do
-        mail_rcpts_str+="--mail-rcpt ${i} "
-    done
-    echo ${mail_rcpts_str}
-}
-
-function version {
-    echo "send_email.sh version v${__MY_VERSION__}"
-    echo "Copyright (c) 2020 Konstantin Gizdov"
-}
-
-function help {
-    # print info & help
-    version
-    echo "Usage: $0 [options]
-options:
-    -a <email address>       Email address of sender
-    -n <string>              Name of sender
-    -d <email address>       Destination email
-    -N <string>              Name of recipient
-    -s <string>              Email subject
-    -c <email>               Email to be added to CC list
-                               can be supplied multiple times
-    -C <email>               Name to be added to CC list
-                               can supplied multiple times
-                               (should correspond to email supplied in previous '-c' option call)
-    -A <file path>           File to be attached
-                               can be supplied multiple times
-    -b <string>              Email body
-    -t <username:password>   Authentication string used to
-                             contact email server
-
-helper options:
-    -D  Debug mode, nothing will be sent
-          implies verbose mode
-    -v  Verbose mode
-    -h  Print this help message
-"
 }
 
 function check_file {
-    if [ ! -e "$1" ]; then
-        fail "The file $1 does not exist." 1
+    # check size of email to be sent
+    # according to file size limits
+    if [ ! -e "${1}" ]; then
+        fail "The file ${1} does not exist." 1
     fi
 
-    size=$(stat -c%s "$1")
-    if (( size > 52428800 )); then
-        fail "File $1 is breaking the file size limit imposed on email (currently 50MB)." 1
+    size=$(stat -c%s "${1}")
+    if (( size > __FILESIZE_LIMIT__ )); then
+        local __msg="File ${1} is breaking the file size limit of (currently 50MB)."
+        if [[ ${__DEBUG_MODE__} != 0 || ${__DRYRUN_MODE__} != 0 ]]; then
+            echo "${__msg}"
+            return 0
+        fi
+        fail "${__msg}" 1
     fi
+}
+
+function check_env_commit_msg {
+    if [[ ${__CMTMSG_MODE__} == 0 ]]; then
+        return 0
+    fi
+    local __env_commit_msg="$(decode_either "${SNDEM_CI_COMMIT_MESSAGE}")"
+    if [[ ! -n ${__env_commit_msg} ]]; then
+        __env_commit_msg="${CI_COMMIT_MESSAGE}"
+    fi
+    check_str_opt ${__CMTMSG_MODE__} "${__env_commit_msg}" "Cannot get commit message from neither environment variable (SNDEM_CI_COMMIT_MESSAGE or CI_COMMIT_MESSAGE): it's empty. Exiting..."
+}
+
+function make_env_commit_msg {
+    if [[ ${__CMTMSG_MODE__} != 1 ]]; then
+        return 0
+    fi
+    local __env_commit_msg="$(decode_either "${SNDEM_CI_COMMIT_MESSAGE}")"
+    if [[ ! -n ${__env_commit_msg} ]]; then
+        __env_commit_msg="${CI_COMMIT_MESSAGE}"
+    fi
+    echo "${__env_commit_msg}"
+}
+
+function make_generic_addr_field {
+    local __name_from="${1}"
+    local __addr_from="${2}"
+    local __addr_field=''
+    if [[ ! -n "${__name_from}" ]]; then
+        __addr_field="${__addr_from}"
+    else
+        __addr_field="\"${__name_from}\" <${__addr_from}>"
+    fi
+    echo "${__addr_field}"
+}
+
+function make_rpl_to {
+    local __rpl_to="$(make_generic_addr_field "${name_from}" "${addr_from}")"
+    echo "${__rpl_to}"
+}
+
+function make_from_field {
+    local __from_field="$(make_generic_addr_field "${name_from}" "${addr_from}")"
+    echo "${__from_field}"
+}
+
+function make_generic_addr_string {
+    local __addr_string=''
+    # assume arrays are stored as comma separated lists
+    readarray -td, __name_arr <<<"${1},"
+    readarray -td, __addr_arr <<<"${2},"
+    # strip trailing $'\n' element
+    unset '__name_arr[-1]'
+    unset '__addr_arr[-1]'
+    # get length of $addr_arr to iterate
+    local __addr_len=${#__addr_arr[@]}
+    for (( i=0; i<${__addr_len}; i++ )); do
+        set +u
+        __addr_string+="$(make_generic_addr_field "${__name_arr[$i]}" "${__addr_arr[$i]}")"
+        set -u
+        if [[ $i != $((${__addr_len} - 1)) ]]; then
+            __addr_string+=', '
+        fi
+    done
+    echo "${__addr_string}"
+}
+
+function make_to_string {
+    local __to_field="$(make_generic_addr_string "${name_to_arr}" "${addr_to_arr}")"
+    echo "${__to_field}"
+}
+
+function make_cc_string {
+    local __cc_string="$(make_generic_addr_string "${name_cc_arr}" "${addr_cc_arr}" )"
+    echo "${__cc_string}"
+}
+
+function make_bcc_string {
+    local __bcc_string="$(make_generic_addr_string "${name_bcc_arr}" "${addr_bcc_arr}")"
+    echo "${__bcc_string}"
+}
+
+function make_mail_rcpts {
+    local __mail_rcpts_str=''
+    # assume arrays are stored as comma separated lists
+    readarray -td, __addr_to_arr <<<"${1},"
+    readarray -td, __addr_cc_arr <<<"${2},"
+    readarray -td, __addr_bcc_arr <<<"${3},"
+    # strip trailing $'\n' element
+    unset '__addr_to_arr[-1]'
+    unset '__addr_cc_arr[-1]'
+    unset '__addr_bcc_arr[-1]'
+    for i in ${__addr_to_arr[@]}; do
+        __mail_rcpts_str+="--mail-rcpt ${i} "
+    done
+    for i in ${__addr_cc_arr[@]}; do
+        __mail_rcpts_str+="--mail-rcpt ${i} "
+    done
+    for i in ${__addr_bcc_arr[@]}; do
+        __mail_rcpts_str+="--mail-rcpt ${i} "
+    done
+    echo ${__mail_rcpts_str}
+}
+
+function make_body_string {
+    local __body_str="${1}"
+    local __commit_str="${2}"
+    if [[ ${__CMTMSG_MODE__} == 1 ]]; then
+        if [[ "${__body_str}" == *"__CMTMSG_POS__"* ]]; then
+            __body_str="$(echo "${__body_str/__CMTMSG_POS__/$__commit_str}")"
+        else
+            __body_str+="
+
+P.S. Commit message was:
+${__commit_str}
+"
+        fi
+    else
+        __body_str="${__body_str}"
+    fi
+    echo "${__body_str}"
 }
 
 function make_body {
@@ -131,11 +291,13 @@ function make_body {
 }
 
 function construct_email {
+    local __file_upload="${1}"
     local start_str="From: ${from_field}
 To: ${to_field}
 Subject: ${subj_field}
 Reply-To: ${rpl_to}
 Cc: ${cc_field}
+Bcc: ${bcc_field}
 MIME-Version: 1.0
 Content-Type: multipart/mixed; boundary=\"MULTIPART-MIXED-BOUNDARY\"
 
@@ -149,7 +311,7 @@ Content-Disposition: inline
 
 ${body_field}
 --MULTIPART-ALTERNATIVE-BOUNDARY--"
-    echo "${start_str}" > "${file_upload}"
+    echo "${start_str}" > "${__file_upload}"
     local attachment_str=''
     local cnt_type='application/octet-stream'
     for att in ${attachment_files[@]}; do
@@ -171,95 +333,277 @@ ${body_field}
 Content-Type: ${cnt_type}
 Content-Transfer-Encoding: base64
 Content-Disposition: attachment; filename=\"${att}\"\n"
-        echo -e "${attachment_str}" >> "${file_upload}"
+        echo -e "${attachment_str}" >> "${__file_upload}"
         # convert file to base64 and append to the upload file
-        echo "$(cat "${att}" | base64)" >> "${file_upload}"
+        echo "$(cat "${att}" | base64)" >> "${__file_upload}"
     done
 
     # end of uploaded file
-    echo "--MULTIPART-MIXED-BOUNDARY--" >> "${file_upload}"
+    echo "--MULTIPART-MIXED-BOUNDARY--" >> "${__file_upload}"
 }
 
-while getopts "t:c:C:a:n:d:N:s:A:b:Dvh" opt; do
+function version {
+    echo "send_email.sh (or SNDEM for short) version v${__MY_VERSION__}"
+    echo "Copyright (c) 2020 Konstantin Gizdov"
+}
+
+function help {
+    # print info & help
+    version
+    echo ""
+    echo "Usage: $0 [options]
+
+note:
+    By default all options that require input can be specified either
+    as a raw or base64-encoded string. This also includes the specific
+    environment variables in use. This is useful for continuous
+    integration environments (such as GitLab) which require that
+    masked (secret) variables can only be base64-encoded. As a side
+    effect this probably fixes some input ambiguities, but requires
+    you to double encode a base64-encoded string if you want to pass
+    it as a variable.
+
+options:
+    -s <server>                  email server to use
+                                   format: <protocol>://example.server.com:<port>
+                                   e.g.: smtp://smtp.gmail.com:587
+
+    -a <email>                   email address of sender
+    -N <string>                  name of sender
+
+    -r <email>[,<email>,...]     comma separated list of recipient emails
+    -R <name>[,<name>,...]       comma separated list of recipient names
+
+    -c <email>[,<email>,...]     comma separated list of emails
+                                   to be added to CC list
+    -C <name>[,<name>,...]       comma separated list of names
+                                   corresponding to each email
+                                   (in order) in the CC list
+
+    -e <email>[,<email>,...]     comma separated list of emails
+                                   to be added to BCC list
+    -E <name>[,<name>,...]       comma separated list of names
+                                   corresponding to each email
+                                   (in order) in the BCC list
+
+    -S <string>                  email subject
+
+    -A <file path>               file to be attached
+                                   can be supplied multiple times
+
+    -b <string>                  email body
+
+    -m <commit message>          commit message to be included in email
+                                   To place the commit message in a particular
+                                   place in your email, supply an email body
+                                   with __CMTMSG_POS__ string somewhere inside
+                                   it. If not given, commit message will be in
+                                   P.S.
+    -M                           include environment supplied commit message
+                                   in email. Message is taken from either:
+                                    - CI_COMMIT_MESSAGE
+                                    - SNDEM_CI_COMMIT_MESSAGE
+                                   environment variable. When both are
+                                   defined, SNDEM_CI_COMMIT_MESSAGE is
+                                   preferred. When commit message is
+                                   specified on command line, that is used
+                                   instead.
+
+    -t <username:password>       authentication string used to
+                                 contact email server
+
+    -L                           override file size limit for emails:
+                                   can be specified in any format (e.g. 50M or 52428800)
+                                   default is 50MB (52428800 bytes)
+
+helper options:
+    -n  dry run - process everything, but
+          don't send an email. Implies
+          debug and verbose mode
+    -D  debug mode, nothing will be sent
+          implies verbose mode
+    -v  verbose mode
+    -V  print version and exit
+    -h  print this help message and exit
+"
+}
+
+# trap a temporary file to clean up on exit
+file_upload="$(mktemp)"
+trap "rm -rf ${file_upload}" EXIT
+
+# read environment
+set +u
+srv_url="$(decode_either "${SNDEM_EMAIL_SERVER}")"
+addr_from="$(decode_either "${SNDEM_FROM_EMAIL}")"
+name_from="$(decode_either "${SNDEM_FROM_NAME}")"
+addr_to_arr="$(decode_either "${SNDEM_RCPNT_EMAILS}")"
+name_to_arr="$(decode_either "${SNDEM_RCPNT_NAMES}")"
+addr_cc_arr="$(decode_either "${SNDEM_CC_EMAILS}")"
+name_cc_arr="$(decode_either "${SNDEM_CC_NAMES}")"
+addr_bcc_arr="$(decode_either "${SNDEM_BCC_EMAILS}")"
+name_bcc_arr="$(decode_either "${SNDEM_BCC_NAMES}")"
+subj_field="$(decode_either "${SNDEM_SUBJECT}")"
+email_creds="$(decode_either "${SNDEM_EMAIL_AUTH}")"
+commit_msg="$(decode_either "${SNDEM_CI_COMMIT_MESSAGE}")"
+body_str="$(decode_either "${SNDEM_EMAIL_BODY}")"
+set -u
+attachment_files=()
+
+# get command line option
+while getopts "t:c:C:e:E:a:d:N:S:A:b:m:r:R:L:s:MDvhVn" opt; do
     case $opt in
         a)
-            addr_from="${OPTARG}"
-            ;;
-        n)
-            name_from="${OPTARG}"
-            ;;
-        d)
-            addr_to="${OPTARG}"
+            addr_from="$(decode_either "${OPTARG}")"
             ;;
         N)
-            name_to="${OPTARG}"
+            __SENDER_NAME__=1
+            name_from="$(decode_either "${OPTARG}")"
             ;;
-        s)
-            subj_field="${OPTARG}"
+        r)
+            addr_to_arr="$(decode_either "${OPTARG}")"
+            ;;
+        R)
+            name_to_arr="$(decode_either "${OPTARG}")"
+            ;;
+        S)
+            subj_field="$(decode_either "${OPTARG}")"
             ;;
         c)
-            addr_cc_arr+=("${OPTARG}")
+            addr_cc_arr="$(decode_either "${OPTARG}")"
             ;;
         C)
-            name_cc_arr+=("${OPTARG}")
+            name_cc_arr="$(decode_either "${OPTARG}")"
+            ;;
+        e)
+            addr_bcc_arr="$(decode_either "${OPTARG}")"
+            ;;
+        E)
+            name_bcc_arr="$(decode_either "${OPTARG}")"
             ;;
         A)
-            attachment_files+=("${OPTARG}")
+            attachment_files+=("$(decode_either "${OPTARG}")")
             ;;
         b)
-            body_str="${OPTARG}"
+            body_str="$(decode_either "${OPTARG}")"
+            ;;
+        m)
+            __CMTMSG_MODE__=1
+            __CMTMSG_CMD_MODE__=1
+            commit_msg="$(decode_either "${OPTARG}")"
+            ;;
+        M)
+            __CMTMSG_MODE__=1
+            ;;
+        s)
+            srv_url="$(decode_either "${OPTARG}")"
+            ;;
+        L)
+            __FILESIZE_LIMIT__="$(numfmt --to=none --from=auto "$(decode_either "${OPTARG}")")"
             ;;
         D)
             __DEBUG_MODE__=1
             ;;
+        n)
+            __DRYRUN_MODE__=1
+            __DEBUG_MODE__=1
+            __VERBOSE_MODE__=1
+            ;;
+        B)
+            __BASE64_MODE__=1
+            ;;
         v)
             __VERBOSE_MODE__=1
             ;;
-        t)
-            email_creds="${OPTARG}"
+        v)
+            version
+            exit 0
             ;;
-        ?|h)
+        t)
+            email_creds="$(decode_either "${OPTARG}")"
+            ;;
+        h)
             help
+            exit 0
             ;;
         :)
-            echo "Option -${OPTARG} needs an argument."
-            exit 1
+            help
+            fail "Option -${OPTARG} needs an argument." 1
             ;;
         \?)
-            echo "Invalid option -${OPTARG}"
-            exit 1
+            help
+            fail "Invalid option -${OPTARG}" 1
             ;;
     esac
 done
 
-if [[ -z "${attachment_files}" ]]; then
-    attachment_files=('test.pdf')
-fi
 
+# validation of parameters
+check_srv
+check_email_creds
+check_addr_from
+check_name_from
+check_addr_to
+check_subj
+check_size_arrs "${name_to_arr}" "${addr_to_arr}"
+check_size_arrs "${name_cc_arr}" "${addr_bcc_arr}"
+check_size_arrs "${name_cc_arr}" "${addr_bcc_arr}"
+check_env_commit_msg
+
+# create needed variables
+if [[ ${__CMTMSG_CMD_MODE__} != 1 ]]; then
+    commit_msg="$(make_env_commit_msg)"
+fi
+from_field="$(make_from_field)"
+rpl_to="$(make_rpl_to)"
+to_field="$(make_to_string)"
 cc_field="$(make_cc_string)"
+bcc_field="$(make_bcc_string)"
+body_str="$(make_body_string "${body_str}" "${commit_msg}")"
 body_field="$(make_body)"
-construct_email
+mail_rcpts_comm="$(make_mail_rcpts "${addr_to_arr}" "${addr_cc_arr}" "${addr_bcc_arr}")"
+
+# write email in a file to be sent
+construct_email "${file_upload}"
+
+# make sure we're not sending a huge file
 check_file "${file_upload}"
 
 curl_command='curl'
 if [[ ${__VERBOSE_MODE__} == 1 ]]; then
     curl_command+=' -v'
 fi
-curl_command+=" --url ${srv_url} --ssl-reqd --mail-from ${addr_from} --mail-rcpt ${addr_to} $(mail_rcpts) --user ${email_creds} -T ${file_upload}"
+curl_command+=" --url ${srv_url} --ssl-reqd --mail-from ${addr_from} ${mail_rcpts_comm} --user ${email_creds} -T ${file_upload}"
 
-if [[ ${__DEBUG_MODE__} == 1 ]]; then
+# print debug info and save local copy of email
+if [[ ${__DEBUG_MODE__} != 0 ]]; then
     cp "${file_upload}" debug.eml
+    echo "addr_to_arr: ${addr_to_arr}"
+    echo "name_to_arr: ${name_to_arr}"
+    echo "addr_cc_arr: ${addr_cc_arr}"
+    echo "addr_bcc_arr: ${addr_bcc_arr}"
+    echo "from_field: ${from_field}"
+    echo "to_field: ${to_field}"
+    echo "cc_field: ${cc_field}"
+    echo "bcc_field: ${bcc_field}"
+    echo "body_str: ${body_str}"
+    echo "body_field: ${body_field}"
     echo "command that was going to run is:"
     echo "${curl_command}"
-    fail "email file is saved in debug.eml" 0
+    echo "email file is saved in debug.eml"
+fi
+
+# make sure not to send stuff when in dry run mode
+if [[ ${__DRYRUN_MODE__} != 0 ]]; then
+    exit 0
 fi
 
 # send email
-echo "sending ...."
+echo "sending ..."
 eval "${curl_command}"
-res=$?
-if test "$res" != "0"; then
-   echo "sending failed with: $res"
+ret=$?
+if [[ ${ret} != 0 ]]; then
+    fail "sending failed with: ${res}" 1
 else
-    echo "OK"
+    fail "OK" 0
 fi
