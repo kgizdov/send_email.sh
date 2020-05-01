@@ -343,7 +343,8 @@ Content-Disposition: attachment; filename=\"${att}\"\n"
 }
 
 function version {
-    echo "send_email.sh (or SNDEM for short) version v${__MY_VERSION__}"
+    echo "send_email.sh (or SNDEM for short) version ${__MY_VERSION__}"
+    echo ""
     echo "Copyright (c) 2020 Konstantin Gizdov"
 }
 
