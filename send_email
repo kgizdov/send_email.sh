@@ -426,6 +426,22 @@ helper options:
     -v  verbose mode
     -V  print version and exit
     -h  print this help message and exit
+
+environment variables in use:
+    SNDEM_EMAIL_SERVER         specify email server
+    SNDEM_FROM_EMAIL           sender email
+    SNDEM_FROM_NAME            sender name
+    SNDEM_RCPNT_EMAILS         comma separated recipient emails
+    SNDEM_RCPNT_NAMES          comma separated recipient names
+    SNDEM_CC_EMAILS            comma separated CC emails
+    SNDEM_CC_NAMES             comma separated CC names
+    SNDEM_BCC_EMAILS           comma separated BCC emails
+    SNDEM_BCC_NAMES            comma separated BCC names
+    SNDEM_SUBJECT              email subject
+    SNDEM_EMAIL_AUTH           email authorisation string
+    SNDEM_CI_COMMIT_MESSAGE    commit message
+    CI_COMMIT_MESSAGE          commit message
+    SNDEM_EMAIL_BODY           email body
 "
 }
 
