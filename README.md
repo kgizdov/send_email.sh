@@ -5,6 +5,7 @@ Depends only on:
  - coreutils (`base64`, `numfmt`, `stat`)
  - bash
  - curl
+
 Aimed at sending emails from within
 continuous integration runners
 and other feature-limited light
@@ -12,7 +13,7 @@ environments
 
 It's flexible and supports supplying information
 through environment variable (useful in CIs) and
-on the command line.
+on the command line:
 
 ```bash
 $ ./send_email -s 'smtp://smtp.gmail.com:587' -t 'username:password' -a 'my@email.com' -r 'your@email.com,teamgroup@email.com' -R 'Your Name,Team Name'
@@ -27,14 +28,14 @@ $ export SNDEM_RCPNT_NAMES='Your Name,Team Name'
 $ ./send_email
 ```
 It has another feature to also accept either raw or `base64` encoded strings
-for its input arguments/variables. E.g.
+for its input arguments/variables. e.g.:
 ```bash
 # it can run like this
 $ ./send_email -s 'smtp://smtp.gmail.com:587' -t 'username:password' -a 'my@email.com' -r 'your@email.com'
 # or like this
 $ ./send_email -s 'c210cDovL3NtdHAuZ21haWwuY29tOjU4Nwo=' -t 'dXNlcm5hbWU6cGFzc3dvcmQK' -a 'bXlAZW1haWwuY29tCg==' -r 'eW91ckBlbWFpbC5jb20K'
 ```
-Moreover, you can mix and match as needed.
+Moreover, you can mix and match as needed:
 ```bash
 # like this
 $ ./send_email -s 'smtp://smtp.gmail.com:587' -t 'dXNlcm5hbWU6cGFzc3dvcmQK' -a 'my@email.com' -r 'eW91ckBlbWFpbC5jb20K'
@@ -44,7 +45,7 @@ $ env SNDEM_EMAIL_AUTH='dXNlcm5hbWU6cGFzc3dvcmQK' ./send_email -s 'smtp://smtp.g
 The last one is especially useful as some CI environments only allow masked variables
 if they are `base64` encoded strings. This way, you can easily hide your email credentials from logs.
 
-You can also mix and match and include things like your commit message or attachments or both
+You can go wild and even include things like your commit message or attachments or both:
 ```bash
 $ env SNDEM_EMAIL_SERVER='smtp://smtp.gmail.com:587' SNDEM_EMAIL_AUTH='dXNlcm5hbWU6cGFzc3dvcmQK' \
       SNDEM_FROM_EMAIL='my@email.com' \
