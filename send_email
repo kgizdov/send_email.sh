@@ -13,13 +13,13 @@
 set -euo pipefail
 IFS=$'\n\t'
 __SNDEM_VERSION_MAJOR__="0"
-__SNDEM_VERSION_MINOR__="3"
-__SNDEM_VERSION_PATCH__="1"
+__SNDEM_VERSION_MINOR__="4"
+__SNDEM_VERSION_PATCH__="0"
 __SNDEM_VERSION__="${__SNDEM_VERSION_MAJOR__}.${__SNDEM_VERSION_MINOR__}.${__SNDEM_VERSION_PATCH__}"
 __DEBUG_MODE__=0
 __DRYRUN_MODE__=0
 __VERBOSE_MODE__=0
-__BASE64_MODE__=0
+__BODY_HTML_MODE__=0
 __CMTMSG_MODE__=0
 __CMTMSG_CMD_MODE__=0
 __REQSUBJ_MODE__=0
@@ -281,9 +281,19 @@ function make_body {
     echo "${body_str}" | base64
 }
 
+function make_body_cnt_type {
+    local __body_html="${1}"
+    local __body_cnt_type='text/plain'
+    if [[ ${__body_html} == 1 ]]; then
+        __body_cnt_type='text/html'
+    fi
+    echo "${__body_cnt_type}"
+}
+
 function construct_email {
     local __file_upload="${1}"
-    local start_str="From: ${from_field}
+    local __body_type="$(make_body_cnt_type "${2}")"
+    local __start_str="From: ${from_field}
 To: ${to_field}
 Subject: ${subj_field}
 Reply-To: ${rpl_to}
@@ -296,19 +306,23 @@ Content-Type: multipart/mixed; boundary=\"MULTIPART-MIXED-BOUNDARY\"
 Content-Type: multipart/alternative; boundary=\"MULTIPART-ALTERNATIVE-BOUNDARY\"
 
 --MULTIPART-ALTERNATIVE-BOUNDARY
-Content-Type: text/plain; charset=utf-8
+Content-Type: ${__body_type}; charset=utf-8
 Content-Transfer-Encoding: base64
 Content-Disposition: inline
 
 ${body_field}
 --MULTIPART-ALTERNATIVE-BOUNDARY--"
-    echo "${start_str}" > "${__file_upload}"
+    echo "${__start_str}" > "${__file_upload}"
     local attachment_str=''
     local cnt_type='application/octet-stream'
     for att in ${attachment_files[@]}; do
         attachment_str=''
         if [[ ${att##*.} == 'txt' ]]; then
             cnt_type='text/plain'
+        elif [[ ${att##*.} == 'htm' ]]; then
+            cnt_type='text/html'
+        elif [[ ${att##*.} == 'html' ]]; then
+            cnt_type='text/html'
         elif [[ ${att##*.} == 'jpg' ]]; then
             cnt_type='image/jpeg'
         elif [[ ${att##*.} == 'jpeg' ]]; then
@@ -459,7 +473,7 @@ set -u
 attachment_files=()
 
 # get command line option
-while getopts "t:c:C:e:E:a:d:N:S:A:b:m:r:R:L:s:MDvhVn" opt; do
+while getopts "t:c:C:e:E:a:d:N:S:A:b:m:r:R:L:s:HMDvhVn" opt; do
     case $opt in
         a)
             addr_from="$(decode_either "${OPTARG}")"
@@ -495,6 +509,9 @@ while getopts "t:c:C:e:E:a:d:N:S:A:b:m:r:R:L:s:MDvhVn" opt; do
         b)
             body_str="$(decode_either "${OPTARG}")"
             ;;
+        H)
+            __BODY_HTML_MODE__=1
+            ;;
         m)
             __CMTMSG_MODE__=1
             __CMTMSG_CMD_MODE__=1
@@ -516,9 +533,6 @@ while getopts "t:c:C:e:E:a:d:N:S:A:b:m:r:R:L:s:MDvhVn" opt; do
             __DRYRUN_MODE__=1
             __DEBUG_MODE__=1
             __VERBOSE_MODE__=1
-            ;;
-        B)
-            __BASE64_MODE__=1
             ;;
         v)
             __VERBOSE_MODE__=1
@@ -572,7 +586,7 @@ body_field="$(make_body)"
 mail_rcpts_comm="$(make_mail_rcpts "${addr_to_arr}" "${addr_cc_arr}" "${addr_bcc_arr}")"
 
 # write email in a file to be sent
-construct_email "${file_upload}"
+construct_email "${file_upload}" "${__BODY_HTML_MODE__}"
 
 # make sure we're not sending a huge file
 check_file "${file_upload}"
