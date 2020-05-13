@@ -12,7 +12,7 @@
 # environments
 set -euo pipefail
 IFS=$'\n\t'
-__MY_VERSION__="0.2"
+__MY_VERSION__="0.3"
 __DEBUG_MODE__=0
 __DRYRUN_MODE__=0
 __VERBOSE_MODE__=0
@@ -113,9 +113,7 @@ function check_name_arr {
     # returns:
     # - 0 if empty
     # - 1 if not
-    readarray -td, __name_arr <<<"${1},"
-    # strip trailing $'\n' element
-    unset '__name_arr[-1]'
+    IFS=',' read -ra __name_arr <<<"${1},"
     if [[ ${#__name_arr[@]} == 1 ]] && [[ ! -n "${__name_arr[0]}" ]]; then
         echo 0
     else
@@ -132,11 +130,8 @@ function check_size_arrs {
         return 0
     fi
     # assume arrays are stored as comma separated lists
-    readarray -td, __name_arr <<<"${1},"
-    readarray -td, __addr_arr <<<"${2},"
-    # strip trailing $'\n' element
-    unset '__name_arr[-1]'
-    unset '__addr_arr[-1]'
+    IFS=',' read -ra __name_arr <<<"${1},"
+    IFS=',' read -ra __addr_arr <<<"${2},"
     # get length of $addr_cc_arr and $name_cc_arr arrays
     # and compare their sizes
     local __name_len=${#__name_arr[@]}
@@ -212,11 +207,8 @@ function make_from_field {
 function make_generic_addr_string {
     local __addr_string=''
     # assume arrays are stored as comma separated lists
-    readarray -td, __name_arr <<<"${1},"
-    readarray -td, __addr_arr <<<"${2},"
-    # strip trailing $'\n' element
-    unset '__name_arr[-1]'
-    unset '__addr_arr[-1]'
+    IFS=',' read -ra __name_arr <<<"${1},"
+    IFS=',' read -ra __addr_arr <<<"${2},"
     # get length of $addr_arr to iterate
     local __addr_len=${#__addr_arr[@]}
     for (( i=0; i<${__addr_len}; i++ )); do
@@ -248,13 +240,9 @@ function make_bcc_string {
 function make_mail_rcpts {
     local __mail_rcpts_str=''
     # assume arrays are stored as comma separated lists
-    readarray -td, __addr_to_arr <<<"${1},"
-    readarray -td, __addr_cc_arr <<<"${2},"
-    readarray -td, __addr_bcc_arr <<<"${3},"
-    # strip trailing $'\n' element
-    unset '__addr_to_arr[-1]'
-    unset '__addr_cc_arr[-1]'
-    unset '__addr_bcc_arr[-1]'
+    IFS=',' read -ra __addr_to_arr <<<"${1},"
+    IFS=',' read -ra __addr_cc_arr <<<"${2},"
+    IFS=',' read -ra __addr_bcc_arr <<<"${3},"
     for i in ${__addr_to_arr[@]}; do
         __mail_rcpts_str+="--mail-rcpt ${i} "
     done
