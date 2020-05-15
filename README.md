@@ -11,7 +11,8 @@ continuous integration runners
 and other feature-limited light
 environments
 
-It's flexible and supports supplying information
+## Usage
+`send_mail` is flexible and supports supplying information
 through environment variable (useful in CIs) and
 on the command line:
 
@@ -71,3 +72,33 @@ CI Runner
 and `artifacts.zip` will be attached to the email
 
 For more options run `send_email -h`.
+
+## Examples
+
+### GitLab CI
+Add `send_mail.sh` to your project as a git submodule.
+```bash
+$ cd my_gitlab_project
+$ git submodule add -b stable https://github.com/kgizdov/send_email.sh.git sndem
+```
+configure your `.gitlab-ci.yaml`:
+```yaml
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+build_my_project:
+  stage: build
+  script:
+    - make
+  artifacts:
+    paths:
+      - artifact.zip
+
+update_me:
+  stage: deploy
+  needs: ["build_my_project"]
+  script:
+    # assuming configuration is done through
+    # GitLab CI settings
+    - sndem/send_email -M -A 'artifact.zip'
+```
