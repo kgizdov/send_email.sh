@@ -14,7 +14,7 @@ set -euo pipefail
 IFS=$'\n\t'
 __SNDEM_VERSION_MAJOR__="0"
 __SNDEM_VERSION_MINOR__="4"
-__SNDEM_VERSION_PATCH__="0"
+__SNDEM_VERSION_PATCH__="1"
 __SNDEM_VERSION__="${__SNDEM_VERSION_MAJOR__}.${__SNDEM_VERSION_MINOR__}.${__SNDEM_VERSION_PATCH__}"
 __DEBUG_MODE__=0
 __DRYRUN_MODE__=0
@@ -360,14 +360,17 @@ function help {
     echo "Usage: $0 [options]
 
 note:
-    By default all options that require input can be specified either
-    as a raw or base64-encoded string. This also includes the specific
-    environment variables in use. This is useful for continuous
-    integration environments (such as GitLab) which require that
-    masked (secret) variables can only be base64-encoded. As a side
-    effect this probably fixes some input ambiguities, but requires
-    you to double encode a base64-encoded string if you want to pass
-    it as a variable.
+    By default the values of all options that require input can be
+    specified either as a raw or base64-encoded string, including
+    the specific environment variables in use as well. This is very
+    useful for continuous integration environments (such as GitLab)
+    which require that masked (secret) variables can only be
+    base64-encoded. As a side effect a lot of input ambiguities can
+    be resolved easily. However, keep in mind that each input is
+    checked for being base64-encoded and if found as such, is
+    decoded only once. This still allows to pass base64-encoded
+    strings as variable values if their value is encoded a second
+    time before being supplied.
 
 options:
     -s <server>                  email server to use
@@ -380,31 +383,32 @@ options:
     -r <email>[,<email>,...]     comma separated list of recipient emails
     -R <name>[,<name>,...]       comma separated list of recipient names
 
-    -c <email>[,<email>,...]     comma separated list of emails
-                                   to be added to CC list
-    -C <name>[,<name>,...]       comma separated list of names
-                                   corresponding to each email
-                                   (in order) in the CC list
+    -c <email>[,<email>,...]     comma separated list of CC email addresses
 
-    -e <email>[,<email>,...]     comma separated list of emails
-                                   to be added to BCC list
-    -E <name>[,<name>,...]       comma separated list of names
-                                   corresponding to each email
-                                   (in order) in the BCC list
+    -C <name>[,<name>,...]       comma separated list of CC names
+                                   corresponding in order to CC email address list
+
+    -e <email>[,<email>,...]     comma separated list of BCC email addresses
+
+    -E <name>[,<name>,...]       comma separated list of BCC names
+                                   corresponding in order to BCC email address list
 
     -S <string>                  email subject
 
     -A <file path>               file to be attached
-                                   can be supplied multiple times
+                                   must be supplied multiple times for different files
 
     -b <string>                  email body
 
+    -H                           enable HTML formatted body (plain text by default)
+
     -m <commit message>          commit message to be included in email
-                                   To place the commit message in a particular
+                                   To put the commit message in a particular
                                    place in your email, supply an email body
                                    with __CMTMSG_POS__ string somewhere inside
                                    it. If not given, commit message will be in
                                    P.S.
+
     -M                           include environment supplied commit message
                                    in email. Message is taken from either:
                                     - CI_COMMIT_MESSAGE
@@ -415,21 +419,23 @@ options:
                                    specified on command line, that is used
                                    instead.
 
-    -t <username:password>       authentication string used to
-                                 contact email server
+    -t <username:password>       authentication string used to contact email server
 
     -L                           override file size limit for emails:
                                    can be specified in any format (e.g. 50M or 52428800)
                                    default is 50MB (52428800 bytes)
 
 helper options:
-    -n  dry run - process everything, but
-          don't send an email. Implies
-          debug and verbose mode
+    -n  dry run - process everything, but don't send an email
+          implies debug and verbose mode
+
     -D  debug mode, nothing will be sent
           implies verbose mode
+
     -v  verbose mode
+
     -V  print version and exit
+
     -h  print this help message and exit
 
 environment variables in use:
