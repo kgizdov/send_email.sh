@@ -560,7 +560,7 @@ while getopts "t:c:C:e:E:a:d:N:S:A:b:m:r:R:L:s:HMDvhVn" opt; do
             ;;
         \?)
             help
-            fail "Invalid option -${OPTARG}" 1
+            fail "Invalid option -- '${OPTARG:-${!OPTIND:-${opt:-}}}'" 1
             ;;
     esac
 done
