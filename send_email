@@ -278,7 +278,7 @@ ${__commit_str}
 }
 
 function make_body {
-    echo "${body_str}" | base64
+    echo -e "${body_str}" | base64
 }
 
 function make_body_cnt_type {
