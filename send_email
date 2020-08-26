@@ -65,6 +65,13 @@ function decode_either {
     fi
 }
 
+function store_email_creds {
+    # put email credentials in a file
+    # for easier reading when passing
+    # to cURL
+    echo "user=\"${2}\"" > "${1}"
+}
+
 function check_str {
     # check if string is defined and not null
     # $1 - string to check
@@ -458,7 +465,8 @@ environment variables in use:
 
 # trap a temporary file to clean up on exit
 file_upload="$(mktemp)"
-trap "rm -rf ${file_upload}" EXIT
+file_creds="$(mktemp)"
+trap "rm -rf ${file_upload} ${file_creds}" EXIT
 
 # read environment
 set +u
@@ -578,6 +586,9 @@ check_size_arrs "${name_cc_arr}" "${addr_cc_arr}"
 check_size_arrs "${name_bcc_arr}" "${addr_bcc_arr}"
 check_env_commit_msg
 
+# put email creds in a file
+store_email_creds "${file_creds}" "${email_creds}"
+
 # create needed variables
 if [[ ${__CMTMSG_CMD_MODE__} != 1 ]]; then
     commit_msg="$(make_env_commit_msg)"
@@ -601,11 +612,12 @@ curl_command='curl'
 if [[ ${__VERBOSE_MODE__} == 1 ]]; then
     curl_command+=' -v'
 fi
-curl_command+=" --url ${srv_url} --ssl-reqd --mail-from ${addr_from} ${mail_rcpts_comm} --user ${email_creds} -T ${file_upload}"
+curl_command+=" --url ${srv_url} --ssl-reqd --mail-from ${addr_from} ${mail_rcpts_comm} -T ${file_upload} -K ${file_creds}"
 
 # print debug info and save local copy of email
 if [[ ${__DEBUG_MODE__} != 0 ]]; then
     cp "${file_upload}" debug.eml
+    cp "${file_creds}" creds.txt
     echo "addr_to_arr: ${addr_to_arr}"
     echo "name_to_arr: ${name_to_arr}"
     echo "addr_cc_arr: ${addr_cc_arr}"
@@ -619,6 +631,7 @@ if [[ ${__DEBUG_MODE__} != 0 ]]; then
     echo "command that was going to run is:"
     echo "${curl_command}"
     echo "email file is saved in debug.eml"
+    echo "credentials file is saved in creds.txt"
 fi
 
 # make sure not to send stuff when in dry run mode
