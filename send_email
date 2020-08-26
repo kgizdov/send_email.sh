@@ -180,7 +180,7 @@ function make_env_commit_msg {
     fi
     local __env_commit_msg="$(decode_either "${SNDEM_CI_COMMIT_MESSAGE}")"
     if [[ ! -n ${__env_commit_msg} ]]; then
-        __env_commit_msg="${CI_COMMIT_MESSAGE}"
+        __env_commit_msg="$(decode_either "${CI_COMMIT_MESSAGE}")"
     fi
     echo "${__env_commit_msg}"
 }
