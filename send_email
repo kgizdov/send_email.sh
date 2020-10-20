@@ -29,6 +29,7 @@ __FILESIZE_LIMIT__=52428800
 function verbose_echo {
     # only print to screen when second argument is 1
     [[ ${2} == 1 ]] && echo "${1}"
+    return 0
 }
 
 function err_echo {
