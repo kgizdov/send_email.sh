@@ -552,7 +552,7 @@ while getopts "t:c:C:e:E:a:d:N:S:A:b:m:r:R:L:s:HMDvhVn" opt; do
         v)
             __VERBOSE_MODE__=1
             ;;
-        v)
+        V)
             version
             exit 0
             ;;
